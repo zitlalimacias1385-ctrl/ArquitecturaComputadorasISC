@@ -1,0 +1,133 @@
+//utilizar los recursos del microcontrolador 
+#include <avr/io.h> //controla los pines 
+#include <avr/pgmspace.h>//memoria flash
+#include <util/delay.h>
+
+// --- DEFINICIÓN DE LEDS (Mapeo de Bits en PORTB) ---
+// Bit 0: Vía A Verde
+// Bit 1: Vía A Rojo
+// Bit 2: Vía B Verde
+// Bit 3: Vía B Rojo
+// Bit 4: Peatonal Verde
+
+
+#define VIA_A_VERDE  (1 << PB0) //permite el paso por la via A 
+#define VIA_A_ROJO   (1 << PB1) //detiene la via A 
+#define VIA_B_VERDE  (1 << PB2) //permite el paso por la via B
+#define VIA_B_ROJO   (1 << PB3) //detiene 
+#define PEATON_VERDE (1 << PB4) //paso al peaton 
+
+// --- TABLAS ALMACENADAS EN MEMORIA FLASH (PROGMEM) ---
+
+// Tiempos por modo en milisegundos: Normal (1s), Hora Pico (0.5s), Bajo Tráfico (2s)
+const uint16_t tiempos_modo_flash[3] PROGMEM = {
+    1000, // Modo 0: Normal
+     500, // Modo 1: Hora Pico
+    2000  // Modo 2: Bajo Tráfico
+};
+
+// Estructura para definir un estado del semáforo
+typedef struct {
+    uint8_t salidas;     //que leds deben permanecer encendidos
+    uint8_t es_parpadeo;  //el estado requiere parapdeo 
+    uint8_t led_parpadeo; // LED específico que parpadea
+    uint8_t sig_normal;   // Siguiente estado si NO se presionó peatón
+    uint8_t sig_peaton;   // Siguiente estado si SÍ se presionó peatón
+} EstadoSemaforo;
+
+// Tabla de transición de estados y salidas almacenada en FLASH
+// Estados: S0, S1, S2, S3, S4, S5
+//datos son constantes             los datos se guardan en la memoria flash edl microcontrolador 
+const EstadoSemaforo tabla_estados_flash[6] PROGMEM = {
+    // S0: Vía A Verde, Vía B Rojo, Peatón Rojo
+    { VIA_A_VERDE | VIA_B_ROJO, 0, 0, 1, 1 },
+    //0 no hay parpadeo
+    //0 no se utiliza ningun led para parpaderar 
+    //1 1  pasa a s1 tanto si hay solicitud peatonal como si no 
+
+    // S1: Vía A Atención (Parpadeo), Vía B Rojo, Peatón Rojo
+    { VIA_B_ROJO, 1, VIA_A_VERDE, 2, 2 },
+
+
+    // S2: Vía A Rojo, Vía B Verde, Peatón Rojo
+    { VIA_A_ROJO | VIA_B_VERDE, 0, 0, 3, 3 },
+
+    // S3: Vía A Rojo, Vía B Atención (Parpadeo), Peatón Rojo
+    { VIA_A_ROJO, 1, VIA_B_VERDE, 0, 4 }, // Si hay peatón va a S4, sino vuelve a S0
+
+    // S4: Vía A Rojo, Vía B Rojo, Peatón Rojo (Transición a peatonal)
+    { VIA_A_ROJO | VIA_B_ROJO, 0, 0, 5, 5 },
+
+    // S5: Vía A Rojo, Vía B Rojo, Peatón Verde
+    { VIA_A_ROJO | VIA_B_ROJO | PEATON_VERDE, 0, 0, 0, 0 }
+};
+
+// Función auxiliar para retardos precisos en milisegundos
+void retardo_ms(uint16_t ms) {
+    while (ms--) {
+        _delay_ms(1);
+    }
+}
+
+int main(void) {
+    // Configurar PB0..PB4 como salidas para los 5 LEDs
+    DDRB |= (1 << PB0) | (1 << PB1) | (1 << PB2) | (1 << PB3) | (1 << PB4);
+    PORTB &= ~0x1F; // Apagar todos los LEDs al inicio
+
+    // Configurar PD2, PD3, PD4 como Entradas para el DIP Switch
+    DDRD &= ~((1 << PD2) | (1 << PD3) | (1 << PD4));
+    PORTD |= (1 << PD2) | (1 << PD3) | (1 << PD4); // Activar Pull-ups internas
+
+    uint8_t estado_actual = 0; // Inicia en S0
+    uint8_t peticion_peaton = 0;
+
+    while (1) {
+        // 1. Leer el DIP Switch (Invertido por resistencias Pull-up)
+        uint8_t dip_raw = (~PIND) >> PD2;
+        uint8_t modo = dip_raw & 0x03;               // SW1 y SW2 para el modo de tráfico
+        uint8_t sw_peaton = (dip_raw >> 2) & 0x01;  // SW3 para solicitud de cruce
+
+        // Registrar solicitud de peatón si el botón/switch se activa
+        if (sw_peaton) {
+            peticion_peaton = 1;
+        }
+
+        // Limitar el modo a un rango válido (0 a 2)
+        if (modo > 2) modo = 0;
+
+        // Leer el tiempo de transición correspondiente desde la FLASH
+        uint16_t tiempo_base = pgm_read_word(&tiempos_modo_flash[modo]);
+
+        // Cargar información del estado actual desde la FLASH
+        EstadoSemaforo estado;
+        memcpy_P(&estado, &tabla_estados_flash[estado_actual], sizeof(EstadoSemaforo));
+
+        // 2. Ejecutar las salidas según el estado
+        if (estado.es_parpadeo) {
+            // El estado de atención debe durar en total el tiempo base (parpadeando)
+            uint16_t medio_tiempo = tiempo_base / 4;
+            for (uint8_t i = 0; i < 2; i++) {
+                PORTB = estado.salidas | estado.led_parpadeo;
+                retardo_ms(medio_tiempo);
+                PORTB = estado.salidas;
+                retardo_ms(medio_tiempo);
+            }
+        } else {
+            PORTB = estado.salidas;
+            retardo_ms(tiempo_base);
+        }
+
+        // 3. Evaluar la transición al siguiente estado
+        if (peticion_peaton) {
+            estado_actual = estado.sig_peaton;
+            // Al terminar el ciclo del peatón (al salir de S5), reiniciamos la petición
+            if (estado_actual == 0) {
+                peticion_peaton = 0;
+            }
+        } else {
+            estado_actual = estado.sig_normal;
+        }
+    }
+
+    return 0;
+}

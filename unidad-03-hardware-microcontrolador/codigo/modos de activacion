@@ -1,0 +1,71 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+
+// Rutina de Servicio de Interrupción para INT0
+ISR(INT0_vect) {
+    _delay_ms(50); // Antirrebote inicial
+
+    // =========================================================================
+    // MODO 1: NIVEL BAJO (LED AHORA EN PIN 15 / PB1)
+    // =========================================================================
+    if (!(PIND & (1 << PIND2))) {
+        PORTB ^= (1 << PORTB1); // Conmuta el LED en Pin 15 (PB1)
+        _delay_ms(150);         // Retardo para visibilidad del parpadeo
+    }
+
+    /*
+    // MODO 2: CUALQUIER CAMBIO LÓGICO (DESACTIVADO)
+    PORTB ^= (1 << PORTB1);
+    */
+
+    /*
+    // MODO 3: FLANCO DE BAJADA (DESACTIVADO)
+    if (!(PIND & (1 << PIND2))) {
+        PORTB ^= (1 << PORTB1);
+    }
+    */
+
+    /*
+    // MODO 4: FLANCO DE SUBIDA (DESACTIVADO)
+    if (PIND & (1 << PIND2)) {
+        PORTB ^= (1 << PORTB1);
+    }
+    */
+
+    EIFR = (1 << INTF0); // Limpia la bandera de interrupción
+}
+
+int main(void) {
+    // 1. Configuración de Puertos
+    DDRB |= (1 << DDB1);    // Pin 15 (PB1) como SALIDA (LED)
+    DDRD &= ~(1 << DDD2);   // Pin 4 (PD2) como ENTRADA (INT0)
+    PORTD |= (1 << PORTD2); // Activa resistencia Pull-up interna en Pin 4 (PD2)[span_1](start_span)[span_1](end_span)
+
+    // 2. Configuración de INT0 para MODO 1 (Nivel Bajo: ISC01 = 0, ISC00 = 0)
+    EICRA &= ~((1 << ISC01) | (1 << ISC00)); 
+
+    /*
+    // Configuración para MODO 2 (Cualquier Cambio):
+    // EICRA &= ~(1 << ISC01);
+    // EICRA |= (1 << ISC00);
+
+    // Configuración para MODO 3 (Flanco de Bajada):
+    // EICRA |= (1 << ISC01);
+    // EICRA &= ~(1 << ISC00);
+
+    // Configuración para MODO 4 (Flanco de Subida):
+    // EICRA |= (1 << ISC01) | (1 << ISC00);
+    */
+
+    // 3. Habilitación de la interrupción INT0
+    EIFR = (1 << INTF0);    // Limpia cualquier bandera pendiente
+    EIMSK |= (1 << INT0);   // Habilita la interrupción externa INT0
+
+    // 4. Activa las interrupciones globales
+    sei();
+
+    while (1) {
+        // Ciclo principal libre
+    }
+}

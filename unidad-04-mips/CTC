@@ -1,0 +1,39 @@
+#define F_CPU 16000000UL
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <stdint.h>
+
+volatile uint16_t contador_ms = 0;
+
+ISR(TIMER1_COMPA_vect) {
+    contador_ms++;
+    if (contador_ms >= 500) {
+        PORTB ^= (1 << PB1); // Invierte el estado del LED en el pin físico 15 (PB1)
+        contador_ms = 0;
+    }
+}
+
+int main(void) {
+    // Configurar pin físico 15 (PB1) como salida para el LED
+    DDRB |= (1 << DDB1);
+    
+    // Configurar pin físico 4 (PD2) como entrada (con resistencia pull-up interna opcional)
+    DDRD &= ~(1 << DDD2);
+    PORTD |= (1 << PD2);
+
+    // Configuración del Timer 1 en modo CTC (igual que en la pizarra)
+    TCCR1A = 0;
+    TCCR1B = 0;
+    TCNT1 = 0;
+    OCR1A = 249;                        // Interrupción cada 1 ms con prescaler de 64
+    TCCR1B |= (1 << WGM12);             // Modo CTC
+    TCCR1B |= (1 << CS11) | (1 << CS10); // Prescaler de 64
+    TIMSK1 |= (1 << OCIE1A);            // Habilita interrupción por comparación A
+
+    sei(); // Habilita interrupciones globales
+
+    while (1) {
+        // Si quieres que el parpadeo dependa de un botón en el pin físico 4 (PD2),
+        // puedes leer el estado de (PIND & (1 << PD2)) aquí.
+    }
+}
